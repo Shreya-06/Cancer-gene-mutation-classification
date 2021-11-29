@@ -1,0 +1,775 @@
+# importing the necessary libraries 
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+%matplotlib inline
+import seaborn as sns
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import normalize
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.manifold import TSNE
+import seaborn as sns
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import confusion_matrix
+#from sklearn.metrics.classification import accuracy_score, log_loss
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import SGDClassifier
+from imblearn.over_sampling import SMOTE
+from collections import Counter
+from scipy.sparse import hstack
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.svm import SVC
+from sklearn.model_selection import StratifiedKFold 
+from collections import Counter, defaultdict
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import normalized_mutual_info_score
+from sklearn.metrics import log_loss
+from sklearn.metrics import accuracy_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import MultinomialNB
+import re
+
+# Exploratory Data Analysis
+
+#reading the dataset file
+
+training_variant=pd.read_csv('training_variants.csv')
+training_text=pd.read_csv('training_text.csv',sep="\|\|",names=['ID','Text'],skiprows=1)#reading the csv file
+
+# Exploring training_variant dataset  
+print('No of points in data: ', training_variant.shape[0])
+print('No of features: ', training_variant.shape[1])
+print('Name of features: ', training_variant.columns.values)
+
+Insights:
+
+• ID and Class is a numeric data field
+
+• Gene and Variation are categorical data field
+
+# Exploring training_text dataset  
+print('No of points in data: ', training_text.shape[0])
+print('No of features: ', training_text.shape[1])
+print('Name of features: ', training_text.columns.values)
+
+Insights:
+
+• ID is a numeric data field
+
+• Text is a categorical data field
+
+training_variant.info()
+
+training_text.info()
+
+training_variant.head()
+
+training_text.head()
+
+#Number of Unique Gene values
+training_variant['Gene'].nunique()
+
+#Number of unique Variation values
+training_variant['Variation'].nunique()
+
+# Data Vizualizations
+
+# Plotting the class distribution
+
+training_variant['Class'].value_counts().plot(kind='bar',figsize=(10,7),color='darkblue',alpha=0.5) 
+
+for i,j in enumerate(training_variant['Class'].value_counts()): #Labelling the count of each class
+    plt.text(i-0.1,j,str(j))
+plt.title("Class Distribution")
+plt.grid(alpha=0.5)
+plt.xticks(rotation=2)
+plt.xlabel("Classes")
+plt.ylabel("Frequency")
+plt.show()
+
+#plotting the top 20 Gene values
+
+training_variant['Gene'].value_counts(ascending=True).tail(20).plot(kind='bar',figsize=(14,8))
+#Labelling the count of each class
+for i,j in enumerate(training_variant['Gene'].value_counts(ascending=True).tail(20)): 
+    plt.text(i-0.2,j,str(j))
+plt.grid(alpha=0.4) # to make it less transeprent
+plt.title("Top-20 Gene",fontsize=12)#Title
+plt.ylabel("Frequency",fontsize=12)#y-label
+plt.xlabel("Gene",fontsize=12)#x-label
+plt.show()
+
+#plotting the top 20 variants
+
+training_variant['Variation'].value_counts().head(20).plot(kind='bar',figsize=(14,8))
+for i,j in enumerate(training_variant['Variation'].value_counts().head(20)):
+    plt.text(i-0.2,j,str(j))
+plt.grid(alpha=0.3) # to make it less transeprent
+plt.title("Top-20 Variation",fontsize=12) #title 
+plt.xlabel("Variation",fontsize=12) #x-axis
+plt.ylabel("Frequency",fontsize=12) #y-axis
+plt.show()
+
+#Cummulative distribution of the Gene feature
+
+sns.distplot(sorted(training_variant['Gene'].value_counts().tolist()),bins=40,hist=False,kde_kws=dict(cumulative=True))#cummulative distribution
+plt.grid(alpha=0.9)#Setting the transeperency
+plt.title("Cummulative distribution of Gene")#Title 
+plt.xlabel("Gene_count")#x-axis
+plt.ylabel("Probabilties")#y-axis
+plt.show()
+
+From the graph,We can infer that there are 95% of the genes with occcurences less than or equal to (<=) 50
+
+for i in range(1,training_variant['Class'].nunique()+1): #for loop to run through each unique class
+    training_variant[training_variant['Class']==i]['Gene'].value_counts().head(10).plot(kind='bar')#plotting the top 10 genes in each class
+    for j,k in enumerate(training_variant[training_variant['Class']==i]['Gene'].value_counts().head(10)):#labelling the count
+        plt.text(j-0.1,k,str(k))
+    plt.grid(alpha=0.4) # Transperency of the grid
+    plt.title("Top 20 Genes in Class-{}".format(i))#Title
+    plt.xlabel("Gene")#x-label
+    plt.ylabel("Frequency")#Y-label
+    plt.show()
+
+training_text['Text_length']=training_text['Text'].apply(lambda x:len(str(x).split()))
+training_text.boxplot(column=['Text_length'])
+
+From the boxplot,We can infer that that median is 6871 and the maximum point is 76782. Most of the textual clinical evidence are of less than 20000 words.We only have 276 textual evidence that say the number of words in text are >20000.These are the outliers but these will not impact our analysis because each evidence have various symptoms or lots of explanation/research is required to analyze the case
+
+# Data Preprocessing 
+
+ # Merging the two dataframes on ID column,perfoemed left join
+
+df= training_variant.merge(training_text,on='ID',how='left')
+
+#null values in the dataset
+
+df[df['Text'].isnull()==True]
+
+# Handling the NaN values 
+
+#looping through all the index values where the text column has got the null values and filling them by concatination 
+#of their respective Gene and Variation columns
+
+for i in df[df['Text'].isnull()==True].index:
+    df['Text'].iloc[i]=df['Gene'].iloc[i]+' '+df['Variation'].iloc[i]
+df.isnull().sum()#Cross verifying the data-set to check the null values are present or not
+
+# One hot encoding 
+
+# Preprocessing
+#declaring the fuction to substitute all the strings which does not start with alphabet or numeric with a space and then
+#substitute the resulted white space characters with empty string and finally lowering the string
+
+def preprocesing(x):
+    return re.sub('\s+',' ',re.sub('[^a-zA-Z0-9\n]',' ',str(x))).lower()
+
+#Applying the function preprocessing to the text column and storing the results in another column named as Preprossed_Text
+
+df['Preprocessed_text']=df['Text'].apply(preprocesing)
+
+#from nltk library importing the stopwords in english
+from nltk.corpus import stopwords
+stop=set(stopwords.words('english'))
+import nltk
+
+#Importing the word_tokenize library which tokenizes the sentences to words
+from nltk.tokenize import word_tokenize 
+
+#Performed word tokenization
+df['tokanized']=df.apply(lambda x :nltk.word_tokenize(x['Preprocessed_text']),axis=1)
+
+#removed the stopwords from the tokenized 
+df['stopwords_removed'] = df['tokanized'].apply(lambda y: [item for item in y if item not in stop])
+
+# Lemmatization of the words
+from nltk.stem import WordNetLemmatizer 
+lemmatizer = WordNetLemmatizer()
+df['Cleaned_Text']='' 
+for i in range(0,len(df)):
+    df['Cleaned_Text'].iloc[i]=[lemmatizer.lemmatize(x) for x in df['stopwords_removed'].iloc[i]]
+    
+#joing into a string
+df['Cleaned_Text']=df['Cleaned_Text'].apply(lambda x:' '.join(x)) 
+df.head()
+
+The reason we choose one-hot encoding is it is best for handling categorical data 
+
+df_data=df[['ID','Gene','Variation','Class','Cleaned_Text']]
+df_data.rename(columns={'Cleaned_Text':'Text'},inplace=True)
+
+# Gene and variation Feature 
+y_true = df_data['Class'].values
+df_data.gene = df_data.Gene.str.replace('\s+', '_')
+df_data.variation = df_data.Variation.str.replace('\s+', '_')
+
+# Splitting the data into train and test dataset for tranning and testing the model
+
+x_train, test_df, y_train, y_test = train_test_split(df_data,y_true, stratify = y_true, test_size=0.2)
+
+train_df, cv_df, y_train, y_cv = train_test_split(x_train,y_train, stratify =y_train, test_size=0.2)
+
+#For model fitting, we need to convert our textual features into numerical values.We have used regular expressions, 
+#tokenization, stop words removal and lemmatization to clean the text data.
+#Additionally, we also did One Hot Encoding on categorical features.
+
+#one hot encoding of gene feature
+gene_vectorizer = CountVectorizer() 
+train_gene_feature_onehotCoding = gene_vectorizer.fit_transform(train_df['Gene']) 
+test_gene_feature_onehotCoding = gene_vectorizer.transform(test_df['Gene']) 
+cv_gene_feature_onehotCoding = gene_vectorizer.transform(cv_df['Gene'])
+
+#One-Hot encoding of Variation Feature
+variation_vectorizer = CountVectorizer()
+train_variation_feature_onehotCoding = variation_vectorizer.fit_transform(train_df['Variation'])
+test_variation_feature_onehotCoding = variation_vectorizer.transform(test_df['Variation'])
+cv_variation_feature_onehotCoding = variation_vectorizer.transform(cv_df['Variation'])
+
+#we encode the text feature using the code given below. In the CountVectorizer constructor, 
+#we specify the minimum frequency of occurrence to be 3 and discard all English stop words. 
+#We do this for text features only as the text feature has lots of words 
+#while the gene and variation have only one word in it
+
+text_vectorizer = CountVectorizer(min_df=3)
+train_text_feature_onehotCoding = text_vectorizer.fit_transform(train_df['Text'])
+# getting all the feature names (words)
+train_text_features= text_vectorizer.get_feature_names()
+
+#We also normalize each word as in case of the text feature a particular word may have a high frequency. 
+#In the case of gene and variation, most of the values were 0 and the max value was 1, 
+#so normalization was not required in those cases.
+
+train_text_feature_onehotCoding = normalize(train_text_feature_onehotCoding, axis=0)
+test_text_feature_onehotCoding = text_vectorizer.transform(test_df['Text'])
+test_text_feature_onehotCoding = normalize(test_text_feature_onehotCoding, axis=0)
+cv_text_feature_onehotCoding = text_vectorizer.transform(cv_df['Text'])
+cv_text_feature_onehotCoding = normalize(cv_text_feature_onehotCoding, axis=0)
+
+#We use the hstack function to stack the various data points and 
+#finally convert them into numpy arrays for inputting them to our model.
+
+train_gene_var_onehotCoding = hstack((train_gene_feature_onehotCoding,train_variation_feature_onehotCoding))
+test_gene_var_onehotCoding = hstack((test_gene_feature_onehotCoding,test_variation_feature_onehotCoding))
+cv_gene_var_onehotCoding = hstack((cv_gene_feature_onehotCoding,cv_variation_feature_onehotCoding))
+
+train_x_onehotCoding = hstack((train_gene_var_onehotCoding, train_text_feature_onehotCoding)).tocsr()
+train_y = np.array(list(train_df['Class']))
+
+test_x_onehotCoding = hstack((test_gene_var_onehotCoding, test_text_feature_onehotCoding)).tocsr()
+test_y = np.array(list(test_df['Class']))
+
+cv_x_onehotCoding = hstack((cv_gene_var_onehotCoding, cv_text_feature_onehotCoding)).tocsr()
+cv_y = np.array(list(cv_df['Class']))
+
+print("One hot encoding features :")
+print("number of data points in train data = ", train_x_onehotCoding.shape)
+print("number of data points in test data = ", test_x_onehotCoding.shape)
+print("number of data points in cross validation data =", cv_x_onehotCoding.shape)
+
+# # Plotting the class distribution
+
+# training_variant['Class'].value_counts().plot(kind='bar',figsize=(10,7),color='darkblue',alpha=0.5) 
+# #Labelling the count of each class
+# for i,j in enumerate(training_variant['Class'].value_counts()): 
+#     plt.text(i-0.1,j,str(j))
+# plt.title("Class Distribution")
+# plt.grid(alpha=0.5)
+# plt.xticks(rotation=2)
+# plt.xlabel("Classes")
+# plt.ylabel("Frequency")
+# plt.show()
+
+# Defining Evaluation Metrics 
+
+
+
+from sklearn.metrics import classification_report
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+#function to plot the heat map for confusion matrix , Precision matrix and Recall matrix
+
+def plot_confusion_matrix(test_y, predict_y):
+    # formula for confusion matrix 
+    C = confusion_matrix(test_y, predict_y)
+    print(classification_report(test_y,predict_y,target_names=['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9']))
+    print('\nAccuracy: {:.2f}\n'.format(accuracy_score(test_y,predict_y)))
+    # calculating the Recall Matrix
+    A =((((C.T)/C.sum(axis=1))).T)
+    # calculating the Precision Matrix
+    B = (C/C.sum(axis=0))
+    
+    #ploting the Confusion matrix in heatmap format
+    labels = [1,2,3,4,5,6,7,8,9]
+    print("-"*25, "Confusion matrix", "-"*25)
+    plt.figure(figsize=(20,7))
+    sns.heatmap(C, annot=True, cmap="YlGnBu", fmt=".3f", xticklabels=labels, yticklabels=labels)
+    plt.xlabel('Predicted Class')
+    plt.ylabel('Original Class')
+    plt.show()
+
+    #ploting the Precision matrix in heatmap format
+    print("-"*20, "Precision matrix (Columm Sum=1)", "-"*20)
+    plt.figure(figsize=(20,7))
+    sns.heatmap(B, annot=True, cmap="YlGnBu", fmt=".3f", xticklabels=labels, yticklabels=labels)
+    plt.xlabel('Predicted Class')
+    plt.ylabel('Original Class')
+    plt.show()
+    
+    # plotting Recall matrix in heatmap format
+    print("-"*20, "Recall matrix (Row sum=1)", "-"*20)
+    plt.figure(figsize=(20,7))
+    sns.heatmap(A, annot=True, cmap="YlGnBu", fmt=".3f", xticklabels=labels, yticklabels=labels)
+    plt.xlabel('Predicted Class')
+    plt.ylabel('Original Class')
+    plt.show()
+
+
+
+# Calculating the Logg Loss and Number of mis-classified points for the model 
+# Plotting confusion matrix 
+def predict_and_plot_confusion_matrix(train_x, train_y, test_x, test_y, clf):
+    clf.fit(train_x, train_y)
+    sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+    sig_clf.fit(train_x, train_y)
+    pred_y = sig_clf.predict(test_x)
+
+    # for calculating log_loss we willl provide the array of probabilities belongs to each class
+    print("Log loss :",log_loss(test_y, sig_clf.predict_proba(test_x)))
+    
+    # calculating the number of data points that are misclassified
+    print("Number of mis-classified points :", np.count_nonzero((pred_y- test_y))/test_y.shape[0])
+    plot_confusion_matrix(test_y, pred_y)
+
+# Univariate Analysis
+
+We used Gene, Variation and Text Feauture in predicting the classes and checked which feature has better influence and good in predecting the class
+
+#Performing Univariate analysis with the gene feature using Logistic regression model 
+
+# hyperparameter for SGD classifier.
+alpha = [10 ** x for x in range(-5, 1)] 
+cv_log_error_array=[]
+for i in alpha:
+    #SGDClassifier optimizer
+    clf = SGDClassifier(alpha=i, penalty='l2', loss='log', random_state=42)
+    clf.fit(train_gene_feature_onehotCoding, y_train)
+    #calibrated classifier that predicts the class probabilities rather than the absolute values
+    sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+    sig_clf.fit(train_gene_feature_onehotCoding, y_train)
+    predict_y = sig_clf.predict_proba(cv_gene_feature_onehotCoding)
+    cv_log_error_array.append(log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+    print('Alpha = ', i, "The log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+
+# Plotting the Cross Validation Error values for each alpha value 
+fig, ax = plt.subplots()
+ax.plot(alpha, cv_log_error_array,c='g')
+for i, txt in enumerate(np.round(cv_log_error_array,3)):
+    ax.annotate((alpha[i],np.round(txt,3)), (alpha[i],cv_log_error_array[i]))
+plt.grid()
+plt.title("Cross Validation Error for each alpha")
+plt.xlabel("Alpha i's")
+plt.ylabel("Error measure")
+plt.show()
+
+#Classification with the best alpha value 
+best_alpha = np.argmin(cv_log_error_array)
+clf = SGDClassifier(alpha=alpha[best_alpha], penalty='l2', loss='log', random_state=42)
+clf.fit(train_gene_feature_onehotCoding, y_train)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_gene_feature_onehotCoding, y_train)
+
+# Calculating the log loss for the train , test and cross validation dataset
+predict_y = sig_clf.predict_proba(train_gene_feature_onehotCoding)
+print('For best alpha  value  = ', alpha[best_alpha], "The train log loss is:",log_loss(y_train, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(cv_gene_feature_onehotCoding)
+print('FFor best alpha  value = ', alpha[best_alpha], "The cross validation log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(test_gene_feature_onehotCoding)
+print('For best alpha  value = ', alpha[best_alpha], "The test log loss is:",log_loss(y_test, predict_y, labels=clf.classes_, eps=1e-15))
+
+#Performing Univariate analysis with the variation feature using Logistic regression model 
+
+alpha = [10 ** x for x in range(-5, 1)]
+cv_log_error_array=[]
+for i in alpha:
+    #SGDClassifier optimizer
+    clf = SGDClassifier(alpha=i, penalty='l2', loss='log', random_state=42)
+    clf.fit(train_variation_feature_onehotCoding, y_train)
+    #calibrated classifier that predicts the class probabilities rather than the absolute values
+    sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+    sig_clf.fit(train_variation_feature_onehotCoding, y_train)
+    predict_y = sig_clf.predict_proba(cv_variation_feature_onehotCoding)
+    
+    cv_log_error_array.append(log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+    print('Alpha = ', i, "The log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+
+# Plotting the Cross Validation Error values for each alpha value 
+fig, ax = plt.subplots()
+ax.plot(alpha, cv_log_error_array,c='g')
+for i, txt in enumerate(np.round(cv_log_error_array,3)):
+    ax.annotate((alpha[i],np.round(txt,3)), (alpha[i],cv_log_error_array[i]))
+plt.grid()
+plt.title("Cross Validation Error for each alpha")
+plt.xlabel("Alpha i's")
+plt.ylabel("Error measure")
+plt.show()
+
+#Classification with the best alpha value 
+best_alpha = np.argmin(cv_log_error_array)
+clf = SGDClassifier(alpha=alpha[best_alpha], penalty='l2', loss='log', random_state=42)
+clf.fit(train_variation_feature_onehotCoding, y_train)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_variation_feature_onehotCoding, y_train)
+
+# Calculating the log loss for the train , test and cross validation dataset
+predict_y = sig_clf.predict_proba(train_variation_feature_onehotCoding)
+print('For best alpha  value = ', alpha[best_alpha], "The train log loss is:",log_loss(y_train, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(cv_variation_feature_onehotCoding)
+print('FFor best alpha  value = ', alpha[best_alpha], "The cross validation log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(test_variation_feature_onehotCoding)
+print('For best alpha  value = ', alpha[best_alpha], "The test log loss is:",log_loss(y_test, predict_y, labels=clf.classes_, eps=1e-15))
+
+#Performing Univariate analysis with the variation feature using Logistic regression model 
+
+alpha = [10 ** x for x in range(-5, 1)]
+cv_log_error_array=[]
+for i in alpha:
+    #SGDClassifier optimizer
+    clf = SGDClassifier(alpha=i, penalty='l2', loss='log', random_state=42)
+    clf.fit(train_text_feature_onehotCoding, y_train)
+    #calibrated classifier that predicts the class probabilities rather than the absolute values
+    sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+    sig_clf.fit(train_text_feature_onehotCoding, y_train)
+    predict_y = sig_clf.predict_proba(cv_text_feature_onehotCoding)
+    cv_log_error_array.append(log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+    print('Alpha = ', i, "The log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+
+# Plotting the Cross Validation Error values for each alpha value 
+fig, ax = plt.subplots()
+ax.plot(alpha, cv_log_error_array,c='g')
+for i, txt in enumerate(np.round(cv_log_error_array,3)):
+    ax.annotate((alpha[i],np.round(txt,3)), (alpha[i],cv_log_error_array[i]))
+plt.grid()
+plt.title("Cross Validation Error for each alpha")
+plt.xlabel("Alpha i's")
+plt.ylabel("Error measure")
+plt.show()
+
+#Classification with the best alpha value 
+best_alpha = np.argmin(cv_log_error_array)
+clf = SGDClassifier(alpha=alpha[best_alpha], penalty='l2', loss='log', random_state=42)
+clf.fit(train_text_feature_onehotCoding, y_train)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_text_feature_onehotCoding, y_train)
+
+# Calculating the log loss for the train , test and cross validation dataset
+predict_y = sig_clf.predict_proba(train_text_feature_onehotCoding)
+print('For best alpha value  = ', alpha[best_alpha], "The train log loss is:",log_loss(y_train, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(cv_text_feature_onehotCoding)
+print('For best alpha value = ', alpha[best_alpha], "The cross validation log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(test_text_feature_onehotCoding)
+print('For best alpha value = ', alpha[best_alpha], "The test log loss is:",log_loss(y_test, predict_y, labels=clf.classes_, eps=1e-15))
+
+We can say that this Gene feature is stable across all the data sets(train,test and cross validation) because
+the log loss values have minute difference with the training , test and cross validation data sets
+
+# Logistic Regression
+
+
+• SGDClassifier function for logistic regression is an optimizer function for the ML Model
+
+• The class_weight parameter is set to balanced so that it can take care of an imbalance dataset.
+
+• In our dataset, some classes occur more frequently than others.
+
+• We set the penality as l2 regularization to avoid overfitting.
+
+• The loss parameter is set to log, indicating that we want to apply logistic regression.
+
+• Also, we use the calibrated classifier that predicts the class probabilities rather than the absolute valuesa and we are also using sigmoid activation function.
+
+• Predicting probabilities provides better ways to evaluate the model.
+
+• The dataset is a high dimensionality data with several keywords in the text acting as features and the 9 class values as output targets.
+
+• It is a multi-class classification problem, we use logistic regression with class balancing .
+
+• For the model training, we will use the Log Loss (Logarithmic Loss) as a performance measurement function. In Log Loss the prediction input is a probability value between 0 and 1.
+
+# Logestic Regression model 
+
+alpha = [10 ** x for x in range(-6, 3)]
+cv_log_error_array = []
+for i in alpha:
+    print("alpha =", i)
+    #SGDClassifier function for logistic regression is an optimizer function for the ML Model
+    clf = SGDClassifier(class_weight='balanced', alpha=i, penalty='l2', loss='log', random_state=42)
+    clf.fit(train_x_onehotCoding, train_y)
+    #calibrated classifier that predicts the class probabilities rather than the absolute values
+    sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+    sig_clf.fit(train_x_onehotCoding, train_y)
+    sig_clf_probs = sig_clf.predict_proba(cv_x_onehotCoding)
+    #Log loss is undefined for p=0 or p=1, so probabilities are clipped to max(eps, min(1 - eps, p)).
+    cv_log_error_array.append(log_loss(cv_y, sig_clf_probs, labels=clf.classes_, eps=1e-15))
+    # to avoid rounding error while multiplying probabilites we use log-probability estimates
+    print("Log Loss :",log_loss(cv_y, sig_clf_probs)) 
+    
+# Plotting the Cross Validation Error values for each alpha value
+fig, ax = plt.subplots()
+ax.plot(alpha, cv_log_error_array,c='g')
+for i, txt in enumerate(np.round(cv_log_error_array,3)):
+    ax.annotate((alpha[i],str(txt)), (alpha[i],cv_log_error_array[i]))
+plt.grid()
+plt.title("Cross Validation Error for each alpha")
+plt.xlabel("Alpha i's")
+plt.ylabel("Error measure")
+plt.show()
+
+#We select the best alpha value by using argmin function and then redo the training using the selected alpha value.
+best_alpha = np.argmin(cv_log_error_array)
+clf = SGDClassifier(class_weight='balanced', alpha=alpha[best_alpha], penalty='l2', loss='log', random_state=42)
+clf.fit(train_x_onehotCoding, train_y)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_x_onehotCoding, train_y)
+
+# Calculating the log loss for the train , test and cross validation dataset
+predict_y = sig_clf.predict_proba(train_x_onehotCoding)
+print('For best alpha value = ', alpha[best_alpha], "The train log loss is:",
+                                      log_loss(y_train, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(cv_x_onehotCoding)
+print('For best alpha value = ', alpha[best_alpha], "The cross validation log loss is:",
+                                              log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(test_x_onehotCoding)
+print('For best alpha value = ', alpha[best_alpha], "The test log loss is:",
+                      log_loss(y_test, predict_y, labels=clf.classes_, eps=1e-15))
+
+
+clf = SGDClassifier(class_weight='balanced', alpha=alpha[best_alpha], penalty='l2', loss='log', random_state=42)
+predict_and_plot_confusion_matrix(train_x_onehotCoding, train_y, cv_x_onehotCoding, cv_y, clf)
+
+#from imblearn.over_sampling import SMOTE
+
+#t_x,y_x=smote.fit_resample(train_x_onehotCoding,train_y)
+
+#predict_and_plot_confusion_matrix(t_x, y_x, cv_x_onehotCoding, cv_y, clf)
+
+#X_sm,Y_sm=smote.fit_sample()
+
+# accuracy = accuracy_score(y_true, y_pred)
+# accuracy
+
+# clf = SGDClassifier(class_weight='balanced', alpha=alpha[best_alpha], penalty='l2', loss='log', random_state=42)
+# clf.fit(train_x_onehotCoding,train_y)
+# test_point_index = 1
+# no_feature = 500
+# predicted_cls = sig_clf.predict(test_x_onehotCoding[test_point_index])
+# print("Predicted Class :", predicted_cls[0])
+# print("Predicted Class Probabilities:", np.round(sig_clf.predict_proba(test_x_onehotCoding[test_point_index]),4))
+# print("Actual Class :", test_y[test_point_index])
+# indices = np.argsort(-clf.coef_)[predicted_cls-1][:,:no_feature]
+# print("-"*50)
+
+# KNN
+
+• KNeighborsClassifier function is used as the classification ML Model
+
+• Also, we use the calibrated classifier that predicts the class probabilities rather than the absolute values with  sigmoid activation function.
+
+• Predicting probabilities provides better ways to evaluate the model.
+
+• For the model training, we will use the Log Loss (Logarithmic Loss) as a performance measurement function. In Log Loss the prediction input is a probability value between 0 and 1.
+
+# K - Nearest Neighbour
+
+alpha = [5, 11, 15, 21, 31, 41, 51, 99]
+cv_log_error_array = []
+for i in alpha:
+    print("for alpha =", i)
+    clf = KNeighborsClassifier(n_neighbors=i)
+    clf.fit(train_x_onehotCoding, train_y)
+    #calibrated classifier that predicts the class probabilities rather than the absolute values
+    sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+    sig_clf.fit(train_x_onehotCoding, train_y)
+    sig_clf_probs = sig_clf.predict_proba(cv_x_onehotCoding)
+    cv_log_error_array.append(log_loss(cv_y, sig_clf_probs, labels=clf.classes_, eps=1e-15))
+    # to avoid rounding error while multiplying probabilites we use log-probability estimates
+    print("Log Loss :",log_loss(cv_y, sig_clf_probs)) 
+
+# Plotting the Cross Validation Error values for each alpha value    
+fig, ax = plt.subplots()
+ax.plot(alpha, cv_log_error_array,c='g')
+for i, txt in enumerate(np.round(cv_log_error_array,3)):
+    ax.annotate((alpha[i],str(txt)), (alpha[i],cv_log_error_array[i]))
+plt.grid()
+plt.title("Cross Validation Error for each alpha")
+plt.xlabel("Alpha i's")
+plt.ylabel("Error measure")
+plt.show()
+
+#Classification with the best alpha value 
+best_alpha = np.argmin(cv_log_error_array)
+clf = KNeighborsClassifier(n_neighbors=alpha[best_alpha])
+clf.fit(train_x_onehotCoding, train_y)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_x_onehotCoding, train_y)
+
+# Calculating the log loss for the train , test and cross validation dataset
+predict_y = sig_clf.predict_proba(train_x_onehotCoding)
+print('Best alpha value = ', alpha[best_alpha], "The train log loss is:",log_loss(y_train, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(cv_x_onehotCoding)
+print('Best alpha value = ', alpha[best_alpha], "The cross validation log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(test_x_onehotCoding)
+print('FBest alpha value = ', alpha[best_alpha], "The test log loss is:",log_loss(y_test, predict_y, labels=clf.classes_, eps=1e-15))
+
+clf = KNeighborsClassifier(n_neighbors=alpha[best_alpha])
+predict_and_plot_confusion_matrix(train_x_onehotCoding, train_y, cv_x_onehotCoding, cv_y,clf) 
+
+# clf = KNeighborsClassifier(n_neighbors=alpha[best_alpha])
+# clf.fit(train_x_onehotCoding, train_y)
+# sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+# sig_clf.fit(train_x_onehotCoding, train_y)
+
+# test_point_index = 6
+# predicted_cls = sig_clf.predict(test_x_onehotCoding[0].reshape(1,-1))
+# print("Predicted Class :", predicted_cls[0])
+# print("Actual Class :", test_y[test_point_index])
+# neighbors = clf.kneighbors(test_x_onehotCoding[test_point_index].reshape(1, -1), alpha[best_alpha])
+# print("The ",alpha[best_alpha]," nearest neighbours of the test points belongs to classes",train_y[neighbors[1][0]])
+# print("Fequency of nearest points :",Counter(train_y[neighbors[1][0]]))
+
+# Random forest 
+Random forest consist of decision trees 
+
+When constructing, each particular tree in the forest makes a class prescience and the class with the maximum votes becomes the prediction of our model. 
+
+The count vectors obtained from the sparse matrix are fitted and test scores are calculated by tuning the various parameters to achieve the optimum performance of the model. 
+
+# Random Forest Classifier 
+
+alpha = [100,200,500,1000,2000]
+max_depth = [5, 10]
+cv_log_error_array = []
+for i in alpha:
+    for j in max_depth:
+        print("for n_estimators =", i,"and max depth = ", j)
+        clf = RandomForestClassifier(n_estimators=i, criterion='gini', max_depth=j, random_state=42, n_jobs=-1)
+        clf.fit(train_x_onehotCoding, train_y)
+        sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+        sig_clf.fit(train_x_onehotCoding, train_y)
+        sig_clf_probs = sig_clf.predict_proba(cv_x_onehotCoding)
+        cv_log_error_array.append(log_loss(cv_y, sig_clf_probs, labels=clf.classes_, eps=1e-15))
+        print("Log Loss :",log_loss(cv_y, sig_clf_probs)) 
+
+# Plotting the Cross Validation Error values for each alpha value   
+fig, ax = plt.subplots()
+features = np.dot(np.array(alpha)[:,None],np.array(max_depth)[None]).ravel()
+ax.plot(features, cv_log_error_array,c='g')
+for i, txt in enumerate(np.round(cv_log_error_array,3)):
+    ax.annotate((alpha[int(i/2)],max_depth[int(i%2)],str(txt)), (features[i],cv_log_error_array[i]))
+plt.grid()
+plt.title("Cross Validation Error for each alpha")
+plt.xlabel("Alpha i's")
+plt.ylabel("Error measure")
+plt.show()
+
+#Classification with the best alpha value
+best_alpha = np.argmin(cv_log_error_array)
+clf = RandomForestClassifier(n_estimators=alpha[int(best_alpha/2)], criterion='gini', max_depth=max_depth[int(best_alpha%2)], random_state=42, n_jobs=-1)
+clf.fit(train_x_onehotCoding, train_y)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_x_onehotCoding, train_y)
+
+# Calculating the log loss for the train , test and cross validation dataset
+predict_y = sig_clf.predict_proba(train_x_onehotCoding)
+print('For values of best estimator = ', alpha[int(best_alpha/2)], "The train log loss is:",log_loss(y_train, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(cv_x_onehotCoding)
+print('For values of best estimator = ', alpha[int(best_alpha/2)], "The cross validation log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(test_x_onehotCoding)
+print('For values of best estimator = ', alpha[int(best_alpha/2)], "The test log loss is:",log_loss(y_test, predict_y, labels=clf.classes_, eps=1e-15))
+
+clf = RandomForestClassifier(n_estimators=alpha[int(best_alpha/2)], criterion='gini', max_depth=max_depth[int(best_alpha%2)], random_state=42, n_jobs=-1)
+predict_and_plot_confusion_matrix(train_x_onehotCoding, train_y,cv_x_onehotCoding,cv_y, clf)
+
+# clf = RandomForestClassifier(n_estimators=alpha[int(best_alpha/2)], criterion='gini', max_depth=max_depth[int(best_alpha%2)], random_state=42, n_jobs=-1)
+# clf.fit(train_x_onehotCoding, train_y)
+# sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+# sig_clf.fit(train_x_onehotCoding, train_y)
+
+# test_point_index = 1
+# no_feature = 100
+# predicted_cls = sig_clf.predict(test_x_onehotCoding[test_point_index])
+# print("Predicted Class :", predicted_cls[0])
+# print("Predicted Class Probabilities:", np.round(sig_clf.predict_proba(test_x_onehotCoding[test_point_index]),4))
+# print("Actual Class :", test_y[test_point_index])
+# indices = np.argsort(-clf.feature_importances_)
+# print("-"*50)
+
+# Navie Bayes Model 
+It is a statistical classification technique based on Bayes Theorem
+
+Naive Bayes is suitable for a large chunk of data 
+
+Naive Bayes classifiers have high accuracy and speed on large datasets
+
+alpha = [0.00001, 0.0001, 0.001, 0.1, 1, 10, 100,1000]
+cv_log_error_array = []
+for i in alpha:
+    print("for alpha =", i)
+    clf = MultinomialNB(alpha=i)
+    clf.fit(train_x_onehotCoding, train_y)
+    sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+    sig_clf.fit(train_x_onehotCoding, train_y)
+    sig_clf_probs = sig_clf.predict_proba(cv_x_onehotCoding)
+    cv_log_error_array.append(log_loss(cv_y, sig_clf_probs, labels=clf.classes_, eps=1e-15))
+    # to avoid rounding error while multiplying probabilites we use log-probability estimates
+    print("Log Loss :",log_loss(cv_y, sig_clf_probs)) 
+
+# Plotting the Cross Validation Error values for each alpha value   
+fig, ax = plt.subplots()
+ax.plot(np.log10(alpha), cv_log_error_array,c='g')
+for i, txt in enumerate(np.round(cv_log_error_array,3)):
+    ax.annotate((alpha[i],str(txt)), (np.log10(alpha[i]),cv_log_error_array[i]))
+plt.grid()
+plt.xticks(np.log10(alpha))
+plt.title("Cross Validation Error for each alpha")
+plt.xlabel("Alpha i's")
+plt.ylabel("Error measure")
+plt.show()
+
+#Classification with the best alpha value
+best_alpha = np.argmin(cv_log_error_array)
+clf = MultinomialNB(alpha=alpha[best_alpha])
+clf.fit(train_x_onehotCoding, train_y)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_x_onehotCoding, train_y)
+
+# Calculating the log loss for the train , test and cross validation dataset
+predict_y = sig_clf.predict_proba(train_x_onehotCoding)
+print('For values of best alpha = ', alpha[best_alpha], "The train log loss is:",log_loss(y_train, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(cv_x_onehotCoding)
+print('For values of best alpha = ', alpha[best_alpha], "The cross validation log loss is:",log_loss(y_cv, predict_y, labels=clf.classes_, eps=1e-15))
+predict_y = sig_clf.predict_proba(test_x_onehotCoding)
+print('For values of best alpha = ', alpha[best_alpha], "The test log loss is:",log_loss(y_test, predict_y, labels=clf.classes_, eps=1e-15))
+
+clf = MultinomialNB(alpha=alpha[best_alpha])
+clf.fit(train_x_onehotCoding, train_y)
+sig_clf = CalibratedClassifierCV(clf, method="sigmoid")
+sig_clf.fit(train_x_onehotCoding, train_y)
+sig_clf_probs = sig_clf.predict_proba(cv_x_onehotCoding)
+# to avoid rounding error while multiplying probabilites we use log-probability estimates
+print("Log Loss :",log_loss(cv_y, sig_clf_probs))
+print("Number of missclassified point :", np.count_nonzero((sig_clf.predict(cv_x_onehotCoding)- cv_y))/cv_y.shape[0])
+plot_confusion_matrix(cv_y, sig_clf.predict(cv_x_onehotCoding.toarray()))
+
+
+# test_point_index = 1
+# no_feature = 100
+# predicted_cls = sig_clf.predict(test_x_onehotCoding[test_point_index])
+# print("Predicted Class :", predicted_cls[0])
+# print("Predicted Class Probabilities:", np.round(sig_clf.predict_proba(test_x_onehotCoding[test_point_index]),4))
+# print("Actual Class :", test_y[test_point_index])
+# indices = np.argsort(-clf.coef_)[predicted_cls-1][:,:no_feature]
+# print("-"*50)
+
